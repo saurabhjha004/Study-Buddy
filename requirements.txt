@@ -21,4 +21,3 @@ streamlit_chat>=0.1.1
 streamlit-on-Hover-tabs>=1.0.1
 docx2txt>=0.8
 pillow>=10.0.0
-tiktoken==0.5.2
