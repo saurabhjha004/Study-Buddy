@@ -1,0 +1,31 @@
+# API Keys & Environment
+.env
+
+# Python
+setup.py
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# VS Code
+.vscode/
+
+# Logs
+logs/
+*.log
+
+# FAISS vector store (generated locally, no need to upload)
+faiss_index.bin
+faiss_store.pkl
+
+# Data files
+*.pkl
+*.bin
+
+# OS files
+.DS_Store
+Thumbs.db
