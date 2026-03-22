@@ -19,3 +19,4 @@ youtube-transcript-api>=0.6.1
 streamlit-on-Hover-tabs>=1.0.1
 docx2txt>=0.8
 pillow>=10.0.0
+yt-dlp>=2024.1.0
