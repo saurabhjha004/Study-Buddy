@@ -1,13 +1,12 @@
 from langchain_core.prompts import PromptTemplate
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
 import os
 from dotenv import load_dotenv
 import json
 
-# Load environment variables
 load_dotenv()
 
-# Create a quiz generation prompt template
 quiz_generation_template = """
 You are an expert quiz creator specializing in creating multiple-choice questions (MCQs) for {subject} students at {tone} level.
 
@@ -31,19 +30,29 @@ quiz_generation_prompt = PromptTemplate(
     template=quiz_generation_template
 )
 
-# Initialize the LLM using Groq
 def get_llm():
-    llm = ChatGroq(
+    return ChatGroq(
         model="llama-3.3-70b-versatile",
         api_key=os.getenv("GROQ_API_KEY"),
         temperature=0.3
     )
-    print("Using Groq LLM: llama-3.3-70b-versatile")
-    return llm
 
 def generate_mcq_with_fallback(input_data):
     llm = get_llm()
-    response = llm.invoke(quiz_generation_prompt.format(**input_data))
+
+    # Truncate text to prevent model ignoring JSON instructions on long PDFs
+    input_data = dict(input_data)
+    input_data['text'] = input_data['text'][:3000]
+
+    system = SystemMessage(content=(
+        "You are a JSON-only MCQ generator. "
+        "Your entire response must be a single valid JSON object. "
+        "Do NOT repeat or quote the input text. "
+        "Start with { and end with }. Nothing else."
+    ))
+
+    human = HumanMessage(content=quiz_generation_prompt.format(**input_data))
+    response = llm.invoke([system, human])
 
     if hasattr(response, "content"):
         return response.content

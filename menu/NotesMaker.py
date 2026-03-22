@@ -5,18 +5,14 @@ import streamlit as st
 import os
 import re
 from langchain_groq import ChatGroq
-from youtube_transcript_api import YouTubeTranscriptApi
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
-import time
 from streamlit_lottie import st_lottie
 import json
 import PyPDF2
 import docx2txt
 from PIL import Image
-import io
-import base64
 import httpx
 
 # Try to import pytesseract, but make it optional
@@ -53,10 +49,9 @@ def load_animation():
             animation = json.load(anim_source)
         st_lottie(animation, 1, True, True, "high", 100, -200)
     except Exception:
-        st.info("Note: Animation not loaded. This doesn't affect functionality.")
+        pass
 
 def get_llm():
-    """Initialize Groq LLM"""
     return ChatGroq(
         model="llama-3.3-70b-versatile",
         api_key=os.getenv("GROQ_API_KEY"),
@@ -97,9 +92,38 @@ def get_video_details(video_id):
 
 def get_transcript_from_youtube_api(video_id):
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        return " ".join([entry['text'] for entry in transcript])
-    except Exception:
+        import yt_dlp
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
+        ydl_opts = {
+            'skip_download': True,
+            'writesubtitles': False,
+            'writeautomaticsub': False,
+            'quiet': True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+            # Try manual subtitles first, then auto-generated
+            subtitles = info.get('subtitles', {})
+            auto_captions = info.get('automatic_captions', {})
+
+            captions = subtitles.get('en') or auto_captions.get('en')
+
+            if captions:
+                for fmt in captions:
+                    if fmt.get('ext') == 'json3':
+                        resp = requests.get(fmt['url'])
+                        data = resp.json()
+                        text = ' '.join(
+                            event.get('segs', [{}])[0].get('utf8', '')
+                            for event in data.get('events', [])
+                            if event.get('segs')
+                        )
+                        return text.strip()
+    except Exception as e:
+        print(f"yt-dlp error: {e}")
         return None
 
 def get_transcript_from_alternative_apis(video_id):
@@ -137,8 +161,7 @@ def get_transcript(video_id):
     transcript = get_transcript_from_youtube_api(video_id)
     if transcript:
         return transcript
-    transcript = get_transcript_from_alternative_apis(video_id)
-    return transcript
+    return get_transcript_from_alternative_apis(video_id)
 
 def extract_text_from_file(uploaded_file):
     file_extension = uploaded_file.name.split('.')[-1].lower()
@@ -168,19 +191,29 @@ def extract_text_from_file(uploaded_file):
         return None
 
 def generate_notes(text, is_detailed=True):
-    """Generate notes from text content using Groq LLM"""
-    prompt = DETAILED_PROMPT if is_detailed else SIMPLE_PROMPT
+    from langchain_core.messages import SystemMessage, HumanMessage
+    
     llm = get_llm()
-
-    # Limit text length to avoid token limits
     max_tokens = 25000
     if len(text) > max_tokens:
         text = text[:max_tokens] + "...[text truncated due to length]"
 
+    system = SystemMessage(content="""You are an expert educational content summarizer.
+You ONLY output structured notes. You NEVER repeat or quote the input text.
+Your response MUST start with '## ' heading directly. No preamble, no quoting source material.""")
+
+    prompt = DETAILED_PROMPT if is_detailed else SIMPLE_PROMPT
+    human = HumanMessage(content=f"{prompt}\n\nHere is the content to summarize:\n\n{text}")
+
     try:
-        full_prompt = prompt + "\n\nCONTENT:\n" + text
-        response = llm.invoke(full_prompt)
-        return response.content if hasattr(response, 'content') else str(response)
+        response = llm.invoke([system, human])
+        result = response.content if hasattr(response, 'content') else str(response)
+        
+        # Find where the actual notes start (first ## heading)
+        if '##' in result:
+            result = result[result.index('##'):]
+        
+        return result
     except Exception as e:
         st.error(f"Error generating notes: {str(e)}")
         if is_detailed:
@@ -202,10 +235,9 @@ def display_notes(notes, title="Content"):
     )
 
 def main():
-    st.write("<h1><center>Advanced Notes Generator</center></h1>", unsafe_allow_html=True)
+    st.write("<h1><center>Notes Generator</center></h1>", unsafe_allow_html=True)
     load_animation()
 
-    # Check API key
     if not os.getenv("GROQ_API_KEY"):
         st.error("GROQ_API_KEY not found in .env file.")
         return
@@ -234,8 +266,10 @@ def main():
                             with st.spinner("Fetching transcript..."):
                                 transcript = get_transcript(video_id)
                                 if not transcript:
-                                    st.error("Failed to retrieve transcript. Try uploading a file instead.")
+                                    st.warning("Could not fetch transcript automatically.")
+                                    st.session_state.show_manual_input = True
                                 else:
+                                    st.session_state.show_manual_input = False
                                     st.success(f"Transcript obtained ({len(transcript.split())} words)")
                                     with st.spinner("Generating notes..."):
                                         notes = generate_notes(transcript, note_style_yt == "Comprehensive")
@@ -243,6 +277,32 @@ def main():
                                             display_notes(notes, video['title'])
                     except Exception as e:
                         st.error(f"Error processing video: {str(e)}")
+
+        # Manual transcript fallback
+        if st.session_state.get("show_manual_input", False):
+            st.markdown("---")
+            st.info("""
+            **How to get YouTube transcript manually:**
+            1. Open the YouTube video
+            2. Click **'...'** (three dots) below the video
+            3. Click **'Show transcript'**
+            4. Select all text and copy it
+            5. Paste below
+            """)
+            manual_transcript = st.text_area(
+                "Paste transcript here",
+                height=200,
+                key="manual_transcript"
+            )
+            if st.button("Generate Notes from Transcript", key="generate_manual"):
+                if manual_transcript:
+                    with st.spinner("Generating notes..."):
+                        notes = generate_notes(manual_transcript, note_style_yt == "Comprehensive")
+                        if notes:
+                            st.session_state.show_manual_input = False
+                            display_notes(notes, "YouTube Video")
+                else:
+                    st.warning("Please paste the transcript first.")
 
     with tab2:
         st.markdown("### Generate Notes from Uploaded File")
